@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FibeRcursion!</title>
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reset.min.css">
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.css">
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/theme/black.min.css">
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/highlight/monokai.min.css">
+</head>
+<body>
+    <div class="reveal">
+      <div class="slides">
+        <section>
+            <h1>FibeRcursion!</h1>
+            (Exploring D Fibers)
+        </section>
+        <section>
+          <section>
+            <h3>Recursion</h3>
+          </section>
+          <section>
+            <pre><code  class="language-d" data-trim data-noescape data-line-numbers><script type="text/template">
+auto parseExp(ref string exp) {
+    import std.range: front;
+    import std.ascii: isDigit;
+
+    auto ch = exp.front;
+    if (ch == '(') {
+      return parseGroup(exp);
+    }
+    if (ch.isDigit) {
+      return parseNumber(exp);
+    }
+    assert(0);
+}
+
+auto parseNumber(ref string exp) {
+    import conv = std.conv;
+    return conv.parse!int(exp);
+}
+
+int parseGroup(ref string exp) {
+    import std.range: front, popFront;
+
+    assert(exp.front == '(');
+    exp.popFront;
+    auto res = exp.parseExp;
+    assert(exp.front == ')');
+    exp.popFront;
+    return res;
+}
+
+auto parse(string input) {
+    import std.range : empty;
+
+    auto res = parseExp(input);
+    assert(input.empty);
+    return res;
+}
+
+
+
+string nestedValue(string value, int nestingLevel) {
+    import std.range: array, repeat;
+    string res;
+    res ~= '('.repeat(nestingLevel).array;
+    res ~= value;
+    res ~= ')'.repeat(nestingLevel).array;
+    return res;
+}
+
+int main() {
+    import std.stdio: writeln;
+
+    writeln(parse("(5)"));
+    writeln(parse("(((4)))"));
+    writeln(parse("10".nestedValue(10)));
+    return 0;
+}
+            </script>
+            </code></pre>
+          </section>
+          <section>
+            <pre><code class="language-bash" data-trim data-noescape><script type="text/template">
+5
+4
+10
+            </script></code></pre>
+          </section>
+          <section>
+            <pre><code  class="language-d" data-trim data-noescape data-line-numbers=59><script type="text/template">
+module recurse_parse_sigsegv;
+auto parseExp(ref string exp) {
+    import std.range: front;
+    import std.ascii: isDigit;
+
+    auto ch = exp.front;
+    if (ch == '(') {
+    	return parseGroup(exp);
+    }
+    if (ch.isDigit) {
+    	return parseNumber(exp);
+    }
+    assert(0);
+}
+
+auto parseNumber(ref string exp) {
+	import conv = std.conv;
+
+    return conv.parse!int(exp);
+}
+
+int parseGroup(ref string exp) {
+    import std.range: front, popFront;
+
+	assert(exp.front == '(');
+    exp.popFront;
+    auto res = exp.parseExp;
+    assert(exp.front == ')');
+    exp.popFront;
+    return res;
+}
+
+auto parse(string input) {
+	import std.range : empty;
+
+    auto res = parseExp(input);
+    assert(input.empty);
+    return res;
+}
+
+
+
+string nestedValue(string value, int nestingLevel) {
+    import std.range: array, repeat;
+    string res;
+    res ~= '('.repeat(nestingLevel).array;
+    res ~= value;
+    res ~= ')'.repeat(nestingLevel).array;
+    return res;
+}
+///unhide
+int main() {
+
+	import std.stdio: writeln;
+
+    writeln(parse("(5)"));
+    writeln(parse("(((4)))"));
+    writeln(parse("10".nestedValue(10)));
+    writeln(parse("200".nestedValue(10^^6)));
+    return 0;
+}
+            </script>
+            </code></pre>
+          </section>
+          <section>
+            <pre><code class="language-bash" data-trim data-noescape><script type="text/template">
+5
+4
+10
+Segmentation fault: 11
+            </script></code></pre>
+          </section>
+          <section>
+            <h3>SIGSEGV!</h3>
+            <p class="fragment">Remember Dennis' talk?</p>
+            <p class="fragment">Stack Limit: Windows 1MB, Linux 8MB</p>
+          </section>
+          <section>
+            <h3>SIGSEGV!</h3>
+            <p class="fragment">Convert to Iteration?</p>
+            <p class="fragment">"Emulate" Recursion?</p>
+          </section>
+        </section>
+        <section>
+          <section>
+            <h3>Managed Recursion</h3>
+            <p class="fragment">"Don't re-invent basic features of the lanugage" - Walter</p>
+            <p class="fragment">Too late, sorry Walter!</p>
+          </section>
+          <section>
+            <pre><code  class="language-d" data-trim data-noescape data-line-numbers=3-16,24,27,52,71-74><script type="text/template">
+module recurse_parse_call_util;
+
+class PlainCallUtil
+{
+    static auto call(alias func, Args...)(auto ref Args args)
+    {
+        return func(args);
+    }
+
+    static auto run(alias func, Args...)(auto ref Args args)
+    {
+        return func(args);
+    }
+}
+
+alias CallUtil = PlainCallUtil;
+
+auto parseExp(ref string exp) {
+    import std.range: front;
+    import std.ascii: isDigit;
+
+    auto ch = exp.front;
+    if (ch == '(') {
+    	return CallUtil.call!parseGroup(exp);
+    }
+    if (ch.isDigit) {
+    	return CallUtil.call!parseNumber(exp);
+    }
+    assert(0);
+}
+
+auto parseNumber(ref string exp) {
+	import conv = std.conv;
+
+    return conv.parse!int(exp);
+}
+
+int parseGroup(ref string exp) {
+    import std.range: front, popFront;
+
+	assert(exp.front == '(');
+    exp.popFront;
+    auto res = exp.parseExp;
+    assert(exp.front == ')');
+    exp.popFront;
+    return res;
+}
+
+auto parse(string input) {
+	import std.range : empty;
+
+    auto res = CallUtil.call!parseExp(input);
+    assert(input.empty);
+    return res;
+}
+
+
+
+string nestedValue(string value, int nestingLevel) {
+    import std.range: array, repeat;
+    string res;
+    res ~= '('.repeat(nestingLevel).array;
+    res ~= value;
+    res ~= ')'.repeat(nestingLevel).array;
+    return res;
+}
+
+int main() {
+
+	import std.stdio: writeln;
+    writeln(CallUtil.run!parse("(5)"));
+    writeln(CallUtil.run!parse("(((4)))"));
+    writeln(CallUtil.run!parse("10".nestedValue(10)));
+    writeln(CallUtil.run!parse("200".nestedValue(10^^6)));
+    return 0;
+}
+            </script>
+            </code></pre>
+          </section>
+          <section>
+            <pre><code class="language-bash" data-trim data-noescape><script type="text/template">
+5
+4
+10
+Segmentation fault: 11
+            </script></code></pre>
+          </section>
+          <section>
+            <p class="fragment">Still Segfaults (Expected) </p>
+            <p class="fragment">But now we have an "API" </p>
+            <p class="fragment">Let's "re-implement" recursion </p>
+          </section>
+        </section>
+        <section>
+          <section>
+            <h3>Managed Recursion with Fibers</h3>
+          </section>
+          <section>
+            <pre><code  class="language-d" data-trim data-noescape data-line-numbers=2-85><script type="text/template">
+module recurse_parse_fiber_call_util;
+import core.thread: Fiber;
+import std.traits: ReturnType;
+
+struct FiberCallUtil
+{
+
+    static ref auto getReturn(alias RType)()
+    {
+        static RType arr;
+        return arr;
+    }
+
+    static auto readReturn(alias func)()
+    {
+        import std.range : back, popBack;
+
+        alias RType = ReturnType!func;
+        static if (is(RType == void))
+        {
+            return;
+        }
+        else
+        {
+            return cast(RType)(getReturn!RType);
+        }
+    }
+
+    static void writeReturn(alias func)(ReturnType!func ret)
+    {
+        alias RType = ReturnType!func;
+        getReturn!RType = ret;
+    }
+
+    static auto wrappedFuncCall(alias func, Arg...)(auto ref Arg args)
+    {
+        // Es tut mir leid, Robert
+        auto wrapFunc = () {
+            static if (is(ReturnType!func == void))
+            {
+                func(args);
+            }
+            else
+            {
+                auto ret = func(args);
+                writeReturn!func(ret);
+            }
+        };
+        return wrapFunc;
+    }
+
+    static Fiber toFibre(alias func, Arg...)(auto ref Arg args)
+    {
+        return new Fiber(wrappedFuncCall!func(args));
+    }
+
+    public static auto call(alias func, Arg...)(auto ref Arg args)
+    {
+        d_callStack.assumeSafeAppend ~= toFibre!func(args);
+        Fiber.yield();
+        return readReturn!func;
+    }
+
+    public static auto run(alias func, Arg...)(auto ref Arg args)
+    {
+        import std.range : back, empty, popBack;
+
+        d_callStack.assumeSafeAppend ~= toFibre!func(args);
+        while (!d_callStack.empty)
+        {
+            auto fib = d_callStack.back;
+            if (fib.state == Fiber.State.TERM)
+            {
+                d_callStack.popBack;
+                continue;
+            }
+            fib.call(); // <- this should have error handling
+        }
+        return readReturn!func;
+    }
+
+    static Fiber[] d_callStack;
+}
+
+alias CallUtil = FiberCallUtil;
+
+auto parseExp(ref string exp) {
+    import std.range: front;
+    import std.ascii: isDigit;
+
+    auto ch = exp.front;
+    if (ch == '(') {
+    	return CallUtil.call!parseGroup(exp);
+    }
+    if (ch.isDigit) {
+    	return CallUtil.call!parseNumber(exp);
+    }
+    assert(0);
+}
+
+auto parseNumber(ref string exp) {
+	import conv = std.conv;
+
+    return conv.parse!int(exp);
+}
+
+int parseGroup(ref string exp) {
+    import std.range: front, popFront;
+
+	assert(exp.front == '(');
+    exp.popFront;
+    auto res = exp.parseExp;
+    assert(exp.front == ')');
+    exp.popFront;
+    return res;
+}
+
+auto parse(string input) {
+	import std.range : empty;
+
+    auto res = CallUtil.call!parseExp(input);
+    assert(input.empty);
+    return res;
+}
+
+
+
+string nestedValue(string value, int nestingLevel) {
+    import std.range: array, repeat;
+    string res;
+    res ~= '('.repeat(nestingLevel).array;
+    res ~= value;
+    res ~= ')'.repeat(nestingLevel).array;
+    return res;
+}
+
+int main() {
+
+	import std.stdio: writeln;
+
+    writeln(CallUtil.run!parse("(5)"));
+    writeln(CallUtil.run!parse("(((4)))"));
+    writeln(CallUtil.run!parse("10".nestedValue(10)));
+    writeln(CallUtil.run!parse("200".nestedValue(10^^6)));
+    return 0;
+}
+            </script>
+            </code></pre>
+          </section>
+          <section>
+            <pre><code class="language-bash" data-trim data-noescape><script type="text/template">
+5
+4
+10
+200
+            </script></code></pre>
+          </section>
+          <section>
+            <p class="fragment">Gives us an extra order of magnitude in recursion depth </p>
+            <p class="fragment">Actually kills my computer memory quickly </p>
+            <p class="fragment">What I need is a "stack frame" but I get a whole stack each time.</p>
+            <p class="fragment">Stackless Fiber?</p>
+          </section>
+        </section>
+        <section>
+          <section>
+            <h3>Conclusion</h3>
+          </section>
+          <section>
+            <p>
+              Why would you even want this?
+            </p>
+            <p class="fragment">
+              Bad Idea:
+              <ul class="fragment">
+                Too much overhead
+              </ul>
+              <ul class="fragment">
+                Probably better to just compile/link with the right flags (Ask Dennis how)
+              </ul>
+              <ul class="fragment">
+                Or find a better algorithm
+              </ul>
+            </p>
+          </section>
+          <section>
+            <p>
+              It's not really about recursion
+            </p>
+            <p class="fragment">
+              Key concept is that of a "kernel":
+              <ul class="fragment">
+                Make some request to "kernel" and suspend
+              </ul>
+              <ul class="fragment">
+                Smart "kernel" complete our dirty jobs and wake us
+              </ul>
+            </p>
+          </section>
+          <section>
+            <p class="fragment">
+              Connections with python generators/coroutines
+            </p>
+            <p class="fragment">
+              asyncio is syntax sugar + "kernel" for sleep, io, and callbacks
+            </p>
+            <p class="fragment">
+              David Beazley's curio uses same syntax sugar but higher-level kernel abstraction
+            </p>
+          </section>
+        </section>
+        <section>
+            <h2>END</h2>
+            <p>Slides + Code</p>
+            <p>@ </p>
+            <p><a href="https://github.com/bostikforever/FibeRcursion">https://github.com/bostikforever/FibeRcursion</a></p>
+        </section>
+      </div>
+    </div>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/zoom/zoom.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/notes/notes.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/highlight/highlight.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/math/math.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/markdown/markdown.min.js"></script>
+    <script type="text/javascript" src="reveal-compiler-explorer.js"></script>
+    <script>
+        (function() {
+            const options = {
+              width: "100%",
+              controls: true,
+              progress: true,
+              history: true,
+              center: true,
+              transition: 'default', // none/fade/slide/convex/concave/zoom
+              plugins: [
+                RevealMarkdown,
+                // RevealCompilerExplorer,
+                RevealHighlight,
+                RevealZoom,
+                RevealNotes,
+                RevealMath
+              ],
+              // compilerExplorer: {
+              //   compiler: "dmd",
+              //   runMain: true
+              // }
+            };
+            Reveal.initialize(options);
+        })();
+    </script>
+</body>
+</html>
